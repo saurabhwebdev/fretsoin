@@ -13,13 +13,232 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Sample model - you can modify or remove this
+// User model for authentication and system access
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
   name      String?
+  phone     String?
+  role      UserRole @default(USER)
+  isActive  Boolean  @default(true)
+  
+  // NextAuth.js fields
+  emailVerified DateTime?
+  image         String?
+  password      String?    // For email/password auth
+  
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Relations
+  quotes    Quote[]
+  accounts  Account[]
+  sessions  Session[]
+
   @@map("users")
+}
+
+// NextAuth.js Account model
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+// NextAuth.js Session model
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// NextAuth.js VerificationToken model
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// Client model with GST compliance fields
+model Client {
+  id                String      @id @default(cuid())
+  name              String
+  email             String?
+  phone             String?
+  contactPerson     String?
+  
+  // Address details
+  addressLine1      String
+  addressLine2      String?
+  city              String
+  state             String
+  pincode           String
+  country           String      @default("India")
+  
+  // GST details
+  gstNumber         String?     @unique // GSTIN (15 characters)
+  panNumber         String?     // PAN number
+  clientType        ClientType  @default(UNREGISTERED)
+  
+  // Business details
+  businessType      String?
+  isActive          Boolean     @default(true)
+  
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  // Relations
+  quotes            Quote[]
+
+  @@map("clients")
+}
+
+// Service Item model for services and materials with GST rates
+model ServiceItem {
+  id            String          @id @default(cuid())
+  name          String
+  description   String?
+  itemType      ServiceItemType
+  category      String?
+  
+  // Pricing
+  basePrice     Decimal         @db.Decimal(10, 2)
+  unit          String          @default("unit") // unit, hour, kg, etc.
+  
+  // GST details
+  hsnCode       String?         // HSN/SAC code
+  gstRate       Decimal         @db.Decimal(5, 2) // GST rate in percentage
+  cessRate      Decimal?        @db.Decimal(5, 2) // Cess rate if applicable
+  
+  // Status
+  isActive      Boolean         @default(true)
+  
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  // Relations
+  quoteItems    QuoteItem[]
+
+  @@map("service_items")
+}
+
+// Quote model with GST calculations
+model Quote {
+  id                String        @id @default(cuid())
+  quoteNumber       String        @unique // QT-2024-001
+  title             String?
+  description       String?
+  
+  // Client details
+  clientId          String
+  client            Client        @relation(fields: [clientId], references: [id])
+  
+  // User who created the quote
+  userId            String
+  user              User          @relation(fields: [userId], references: [id])
+  
+  // Quote details
+  quoteDate         DateTime      @default(now())
+  validUntil        DateTime?
+  status            QuoteStatus   @default(DRAFT)
+  
+  // Financial calculations
+  subtotal          Decimal       @db.Decimal(12, 2) // Before tax
+  totalTax          Decimal       @db.Decimal(12, 2) // Total GST + Cess
+  totalAmount       Decimal       @db.Decimal(12, 2) // Final amount
+  
+  // GST breakdown
+  cgstAmount        Decimal?      @db.Decimal(10, 2) // Central GST
+  sgstAmount        Decimal?      @db.Decimal(10, 2) // State GST
+  igstAmount        Decimal?      @db.Decimal(10, 2) // Integrated GST
+  cessAmount        Decimal?      @db.Decimal(10, 2) // Cess amount
+  
+  // Additional details
+  termsAndConditions String?
+  notes             String?
+  
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  // Relations
+  quoteItems        QuoteItem[]
+
+  @@map("quotes")
+}
+
+// Quote items linking quotes to service items
+model QuoteItem {
+  id            String      @id @default(cuid())
+  
+  // Relations
+  quoteId       String
+  quote         Quote       @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  
+  serviceItemId String
+  serviceItem   ServiceItem @relation(fields: [serviceItemId], references: [id])
+  
+  // Item details
+  quantity      Decimal     @db.Decimal(10, 3)
+  unitPrice     Decimal     @db.Decimal(10, 2)
+  discount      Decimal?    @db.Decimal(5, 2) // Discount percentage
+  
+  // Calculated amounts
+  lineTotal     Decimal     @db.Decimal(12, 2) // After discount, before tax
+  taxAmount     Decimal     @db.Decimal(10, 2) // GST + Cess for this line
+  
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@map("quote_items")
+}
+
+// Enums
+enum UserRole {
+  ADMIN
+  MANAGER
+  USER
+}
+
+enum ClientType {
+  REGISTERED      // Has valid GSTIN
+  UNREGISTERED    // No GSTIN
+  COMPOSITION     // Composition scheme
+  EXPORT          // Export client
+  IMPORT          // Import client
+}
+
+enum ServiceItemType {
+  SERVICE
+  PRODUCT
+  MATERIAL
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CONVERTED
 }
